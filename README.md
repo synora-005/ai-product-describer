@@ -54,7 +54,14 @@ python -m app.cli hello
 pytest
 ```
 
-The starter's `.env.example` is optional. The GPT in this project does not read any settings from `.env`. If you do create a `.env` file, never commit it.
+Tested with Python 3.14 on Windows. The dependencies are pinned in `requirements.txt` (PyTorch 2.15.0 and pytest 9.2.0), so a fresh install gets the same versions. Training uses a fixed random seed, so repeat runs on the same corpus give very similar results.
+
+## Data source
+
+- **Dataset:** H&M Personalized Fashion Recommendations (a Kaggle competition), file `articles.csv`.
+- **What I used:** the `detail_desc` column, only for rows where `product_type_name` is `T-shirt`.
+- **Result:** 1,891 unique descriptions (about 200 KB) in `data/products.txt`, built by `make_corpus.py`.
+- **Licence:** it is competition data, so check the competition rules before using it. It is not included in this repo.
 
 ## Get the data
 
@@ -135,6 +142,44 @@ A temperature around 0.5 to 0.8 gives believable text. At 1.2 the model starts i
 6. **Generate.** Start from the end token plus the product details, score the next token, pick one (greedy, or sampled with temperature and top-k), append it and repeat until the end token appears.
 
 **Model size:** vocabulary 512, 64 tokens of context, 64-dimensional vectors, 4 heads, 4 layers, about 270,000 parameters. In my run the validation loss reached about 1.8 (roughly "choosing between 6 likely tokens"), while the training loss kept falling, so the model starts to memorise the corpus after a few hundred steps.
+
+## Results
+
+These numbers come from my own training run (1,000 steps, a few minutes on a laptop CPU).
+
+| | |
+| --- | --- |
+| Corpus | 1,891 descriptions, about 17.8 words each |
+| Tokenizer | vocabulary 512, about 3.2 characters per token (the first description went from 105 bytes to 28 tokens) |
+| Data split | 56,358 training tokens, 6,262 validation tokens |
+| Model | 269,696 parameters (4 layers, 4 heads, 64-dimensional vectors, 64 tokens of context) |
+
+**Loss** (cross-entropy per token; lower is better):
+
+| Step | Train | Validation |
+| --- | --- | --- |
+| 100 | 2.075 | 2.645 |
+| 200 | 1.601 | 2.171 |
+| 300 | 1.385 | 2.049 |
+| 500 | 1.146 | 1.860 |
+| 700 | 1.061 | 1.964 |
+| 900 | 0.954 | 1.805 |
+| 1000 | 0.934 | 1.887 |
+
+**Baseline:** a model that guesses every token at random has a loss of ln(512) ≈ 6.24. The trained model reaches about 1.8 to 1.9 on text it has never seen, which means it is on average choosing between roughly 6 plausible tokens instead of 512.
+
+**Overfitting:** the validation loss stops improving after about 500 to 900 steps while the training loss keeps falling, so after that the model is mostly memorising the corpus.
+
+**Sample output** for the prompt `Oversized cotton t-shirt`:
+
+| Setting | Description |
+| --- | --- |
+| Greedy (temperature 0) | Oversized cotton t-shirt in soft, printed cotton jersey with a print motif on the front and a rounded hem. |
+| Temperature 0.5 | Oversized cotton t-shirt in soft, printed cotton jersey with a chest pocket and a rounded hem. |
+| Temperature 0.8 | Oversized cotton t-shirt in soft, printed jersey with short sleeves. |
+| Temperature 1.2 | Oversized cotton t-shirts in a soft, printed cotton jersey with raw, rlend weglan sleeves and gaded overlocked edges and hem. |
+
+Low and medium temperatures read like real catalogue entries. At 1.2 the model invents words. It also occasionally drops a space (for example "roundedhem" in one greedy output), which is a limit of such a small model.
 
 ## Tests
 

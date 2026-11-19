@@ -1,3 +1,2 @@
-httpx
-pytest
-torch
+pytest==9.2.0
+torch==2.15.0
