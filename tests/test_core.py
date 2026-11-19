@@ -7,6 +7,7 @@ import math
 import pytest
 import torch
 
+from app.cli import main
 from app.core import (
     BPETokenizer,
     CausalSelfAttention,
@@ -14,7 +15,9 @@ from app.core import (
     GPT,
     GPTConfig,
     TransformerBlock,
+    build_prompt,
     corpus_stats,
+    describe_product,
     encode_corpus,
     estimate_loss,
     generate,
@@ -227,6 +230,94 @@ def test_milestone_5_description():
 
 
 # Milestone 6: Develop a CLI for users to input product details and receive generated descriptions.
-@pytest.mark.skip(reason="remove this line when you start milestone 6")
+def tiny_model_files(tmp_path):
+    """Save a small untrained model and tokenizer, so the CLI has something to load."""
+    torch.manual_seed(0)
+    tokenizer = BPETokenizer.train(["the cat sat on the mat"], vocab_size=257 + 5)
+    model = GPT(small_config(vocab_size=tokenizer.vocab_size))
+    model_path, tokenizer_path = str(tmp_path / "model.pt"), str(tmp_path / "tokenizer.json")
+    save_model(model, model_path)
+    tokenizer.save(tokenizer_path)
+    return model_path, tokenizer_path
+
+
 def test_milestone_6():
-    raise NotImplementedError("write the test for milestone 6")
+    # what the user types becomes the start of the description
+    assert build_prompt("oversized cotton  t-shirt") == "Oversized cotton t-shirt"
+    assert build_prompt(["oversized", "cotton", "t-shirt"]) == "Oversized cotton t-shirt"
+    assert build_prompt([]) == ""
+
+    torch.manual_seed(0)
+    tokenizer = BPETokenizer.train(["the cat sat on the mat"], vocab_size=257 + 5)
+    model = GPT(small_config(vocab_size=tokenizer.vocab_size))
+    options = dict(max_new_tokens=15, temperature=1.0, top_k=None, seed=0)
+
+    texts = describe_product(model, tokenizer, ["the", "cat"], variants=3, **options)
+    assert len(texts) == 3
+    assert all(text.startswith("The cat") for text in texts)
+    assert texts[0] != texts[1]                                              # variants differ
+    assert texts == describe_product(model, tokenizer, "the cat", variants=3, **options)  # seed repeats them
+
+
+def test_milestone_6_describe(tmp_path, capsys):
+    model_path, tokenizer_path = tiny_model_files(tmp_path)
+    base = ["describe", "the", "cat", "--model", model_path, "--tokenizer", tokenizer_path,
+            "--max-tokens", "10", "--seed", "0"]
+
+    main(base)
+    first = capsys.readouterr().out
+    assert first.startswith("The cat")
+    main(base)
+    assert capsys.readouterr().out == first      # same seed, same text
+
+    save_path = str(tmp_path / "saved.txt")
+    main(base + ["--variants", "2", "--save", save_path])
+    out = capsys.readouterr().out
+    assert "1. The cat" in out and "2. The cat" in out
+    with open(save_path, encoding="utf-8") as f:
+        assert len(f.read().splitlines()) == 2
+
+
+def test_milestone_6_interactive(tmp_path, capsys, monkeypatch):
+    model_path, tokenizer_path = tiny_model_files(tmp_path)
+    answers = iter(["the cat", ""])
+    monkeypatch.setattr("builtins.input", lambda _="": next(answers))
+    main(["interactive", "--model", model_path, "--tokenizer", tokenizer_path,
+          "--max-tokens", "10", "--seed", "0"])
+    assert "The cat" in capsys.readouterr().out
+
+
+def test_milestone_6_errors(tmp_path):
+    # no trained model yet: a clear message, not a crash
+    with pytest.raises(SystemExit):
+        main(["describe", "top", "--model", str(tmp_path / "nope.pt"),
+              "--tokenizer", str(tmp_path / "nope.json")])
+
+    model_path, tokenizer_path = tiny_model_files(tmp_path)
+    with pytest.raises(SystemExit):
+        main(["describe", "top", "--model", model_path, "--tokenizer", tokenizer_path,
+              "--temperature", "-1"])
+    with pytest.raises(SystemExit):
+        main(["describe", "top", "--model", model_path, "--tokenizer", tokenizer_path,
+              "--variants", "0"])
+    with pytest.raises(SystemExit):
+        main(["train", "--corpus", str(tmp_path / "missing.txt")])
+
+
+def test_milestone_6_train(tmp_path, capsys):
+    corpus = tmp_path / "products.txt"
+    corpus.write_text(
+        "".join(f"Top in soft jersey number {i} with short sleeves.\n" for i in range(30)),
+        encoding="utf-8",
+    )
+    model_path, tokenizer_path = str(tmp_path / "model.pt"), str(tmp_path / "tokenizer.json")
+
+    main(["train", "--corpus", str(corpus), "--steps", "2", "--eval-every", "2",
+          "--vocab-size", "270", "--model", model_path, "--tokenizer", tokenizer_path])
+    assert "step     2" in capsys.readouterr().out
+    assert (tmp_path / "model.pt").exists() and (tmp_path / "tokenizer.json").exists()
+
+    # the freshly trained files work with the describe command
+    main(["describe", "top", "--model", model_path, "--tokenizer", tokenizer_path,
+          "--max-tokens", "5", "--seed", "0"])
+    assert capsys.readouterr().out.startswith("Top")

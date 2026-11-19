@@ -434,5 +434,49 @@ def generate_description(model, tokenizer, prompt="", max_new_tokens=60, tempera
 
 # --- Milestone 6: Develop a CLI for users to input product details and receive generated descriptions.
 # Hint: Structure your code to accept user input and display model output via the command line.
-def milestone_6():  # TODO(milestone 6)
-    raise NotImplementedError("TODO(milestone 6)")
+def build_prompt(details):
+    """Turn what the user typed (a string, or a list of words) into the start of a description."""
+    if isinstance(details, str):
+        words = details.split()
+    else:
+        words = [word for part in details for word in part.split()]
+    text = " ".join(words)
+    return text[:1].upper() + text[1:]     # descriptions in the corpus start with a capital letter
+
+
+def describe_product(model, tokenizer, details, variants=1, max_new_tokens=60, temperature=0.8,
+                     top_k=40, seed=None):
+    """Write `variants` descriptions for the product details. Returns a list of strings.
+    With a seed, variant i uses seed + i, so each one differs but the whole list can be repeated."""
+    prompt = build_prompt(details)
+    return [
+        generate_description(model, tokenizer, prompt, max_new_tokens=max_new_tokens,
+                             temperature=temperature, top_k=top_k,
+                             seed=None if seed is None else seed + i)
+        for i in range(variants)
+    ]
+
+
+def train_from_corpus(corpus_path, model_path, tokenizer_path, vocab_size=512, steps=1000,
+                      eval_every=100, seed=0, log=None):
+    """Everything in one go: learn the tokenizer, train the model, save both."""
+    torch.manual_seed(seed)
+    descriptions = load_corpus(corpus_path)
+    if not descriptions:
+        raise ValueError(f"no usable descriptions found in {corpus_path}")
+
+    tokenizer = BPETokenizer.train(descriptions, vocab_size)
+    tokenizer.save(tokenizer_path)
+
+    config = GPTConfig(vocab_size=tokenizer.vocab_size)
+    train_data, val_data = train_val_split(encode_corpus(descriptions, tokenizer))
+    if len(train_data) <= config.block_size:
+        raise ValueError("the corpus is too small to train on: add more descriptions")
+    if len(val_data) <= config.block_size:
+        val_data = None                      # too little text left over to check against
+
+    model = GPT(config)
+    history = train(model, train_data, val_data, block_size=config.block_size, steps=steps,
+                    eval_every=eval_every, log=log)
+    save_model(model, model_path)
+    return history
