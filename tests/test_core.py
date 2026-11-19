@@ -2,6 +2,8 @@
 
 They start skipped. Remove the `skip` line as you work on each milestone.
 """
+import math
+
 import pytest
 import torch
 
@@ -9,10 +11,18 @@ from app.core import (
     BPETokenizer,
     CausalSelfAttention,
     Embeddings,
+    GPT,
+    GPTConfig,
     TransformerBlock,
     corpus_stats,
     encode_corpus,
+    estimate_loss,
+    get_batch,
     load_corpus,
+    load_model,
+    save_model,
+    train,
+    train_val_split,
 )
 
 
@@ -112,9 +122,55 @@ def test_milestone_3_block():
 
 
 # Milestone 4: Train the GPT model using the collected product descriptions.
-@pytest.mark.skip(reason="remove this line when you start milestone 4")
+def small_config(vocab_size):
+    return GPTConfig(vocab_size=vocab_size, block_size=8, n_embd=16, n_head=2, n_layer=2, dropout=0.0)
+
+
 def test_milestone_4():
-    raise NotImplementedError("write the test for milestone 4")
+    torch.manual_seed(0)
+
+    # batches: y is x moved along by one token
+    data = torch.arange(100)
+    x, y = get_batch(data, block_size=8, batch_size=4)
+    assert x.shape == (4, 8) and y.shape == (4, 8)
+    assert torch.equal(y, x + 1)
+
+    # the split keeps the last 10% for checking
+    train_data, val_data = train_val_split(list(range(100)), val_fraction=0.1)
+    assert len(train_data) == 90 and len(val_data) == 10
+
+    # before training, the model is guessing: loss is close to ln(vocab size)
+    model = GPT(small_config(vocab_size=50))
+    tokens = torch.randint(0, 50, (4, 8))
+    logits, loss = model(tokens, tokens)
+    assert logits.shape == (4, 8, 50)
+    assert abs(loss.item() - math.log(50)) < 0.3
+
+
+def test_milestone_4_training():
+    torch.manual_seed(0)
+    data = torch.tensor([0, 1, 2, 3] * 50)   # a pattern that is easy to learn: 0 1 2 3 0 1 2 3 ...
+    model = GPT(small_config(vocab_size=4))
+
+    before = estimate_loss(model, data, block_size=8, batch_size=8, eval_batches=5)
+    history = train(model, data, data, block_size=8, steps=200, batch_size=8, lr=1e-2, eval_every=100)
+    after = estimate_loss(model, data, block_size=8, batch_size=8, eval_batches=5)
+
+    assert after < before * 0.5
+    assert [record["step"] for record in history] == [100, 200]
+    assert "val_loss" in history[0]
+
+
+def test_milestone_4_save_and_load(tmp_path):
+    torch.manual_seed(0)
+    model = GPT(small_config(vocab_size=20))
+    model.eval()
+    path = str(tmp_path / "model.pt")
+    save_model(model, path)
+
+    loaded = load_model(path)
+    tokens = torch.randint(0, 20, (2, 8))
+    assert torch.allclose(model(tokens)[0], loaded(tokens)[0])
 
 
 # Milestone 5: Implement a text generation feature that creates new product descriptions from a prompt.

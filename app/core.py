@@ -4,6 +4,7 @@ import json
 import math
 import re
 from collections import Counter
+from dataclasses import asdict, dataclass
 
 import torch
 from torch import nn
@@ -257,8 +258,120 @@ class TransformerBlock(nn.Module):
 
 # --- Milestone 4: Train the GPT model using the collected product descriptions.
 # Hint: Implement the training loop, including forward pass, loss calculation, and backpropagation with an optimizer.
-def milestone_4():  # TODO(milestone 4)
-    raise NotImplementedError("TODO(milestone 4)")
+@dataclass
+class GPTConfig:
+    """The size settings of the model."""
+    vocab_size: int
+    block_size: int = 64    # how many tokens the model can look at
+    n_embd: int = 64        # size of each token's vector
+    n_head: int = 4         # attention heads per block
+    n_layer: int = 4        # number of transformer blocks
+    dropout: float = 0.1    # randomly switch off 10% of values while training (fights memorising)
+
+
+class GPT(nn.Module):
+    """Embeddings -> transformer blocks -> LayerNorm -> one score per token in the vocabulary."""
+
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.embeddings = Embeddings(config.vocab_size, config.block_size, config.n_embd)
+        self.drop = nn.Dropout(config.dropout)
+        self.blocks = nn.Sequential(*[
+            TransformerBlock(config.n_embd, config.n_head, config.block_size, config.dropout)
+            for _ in range(config.n_layer)
+        ])
+        self.ln_f = nn.LayerNorm(config.n_embd)
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        self.apply(self._init_weights)
+
+    @staticmethod
+    def _init_weights(module):
+        # small random starting values, so the first guesses are close to "anything is equally likely"
+        if isinstance(module, (nn.Linear, nn.Embedding)):
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if isinstance(module, nn.Linear) and module.bias is not None:
+                nn.init.zeros_(module.bias)
+
+    def forward(self, idx, targets=None):
+        """idx: token IDs (batch, length). Returns scores (batch, length, vocab_size) and,
+        if targets are given, the loss (how badly the next tokens were predicted)."""
+        x = self.drop(self.embeddings(idx))
+        x = self.blocks(x)
+        x = self.ln_f(x)
+        logits = self.lm_head(x)
+        loss = None
+        if targets is not None:
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+        return logits, loss
+
+
+def train_val_split(ids, val_fraction=0.1):
+    """Keep the last part of the data aside to check the model on text it has not trained on."""
+    data = torch.tensor(ids, dtype=torch.long)
+    cut = int(len(data) * (1 - val_fraction))
+    return data[:cut], data[cut:]
+
+
+def get_batch(data, block_size, batch_size):
+    """Pick random windows. y is x shifted one token to the left: the 'next token' at every position."""
+    starts = torch.randint(len(data) - block_size, (batch_size,))
+    x = torch.stack([data[i:i + block_size] for i in starts])
+    y = torch.stack([data[i + 1:i + block_size + 1] for i in starts])
+    return x, y
+
+
+def estimate_loss(model, data, block_size, batch_size=32, eval_batches=20):
+    """Average loss over a few random batches, without training."""
+    was_training = model.training
+    model.eval()
+    total = 0.0
+    with torch.no_grad():
+        for _ in range(eval_batches):
+            x, y = get_batch(data, block_size, batch_size)
+            _, loss = model(x, y)
+            total += loss.item()
+    model.train(was_training)
+    return total / eval_batches
+
+
+def train(model, train_data, val_data=None, *, block_size, steps=1000, batch_size=32,
+          lr=3e-3, eval_every=0, eval_batches=20, log=None):
+    """The training loop. Returns a list of {"step", "train_loss", "val_loss"} records."""
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+    history = []
+    model.train()
+    for step in range(1, steps + 1):
+        x, y = get_batch(train_data, block_size, batch_size)
+        _, loss = model(x, y)                                   # forward pass and loss
+        optimizer.zero_grad(set_to_none=True)
+        loss.backward()                                         # backpropagation
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)  # stop one huge step from wrecking things
+        optimizer.step()                                        # nudge every number to lower the loss
+
+        if eval_every and (step % eval_every == 0 or step == steps):
+            record = {"step": step,
+                      "train_loss": estimate_loss(model, train_data, block_size, batch_size, eval_batches)}
+            if val_data is not None:
+                record["val_loss"] = estimate_loss(model, val_data, block_size, batch_size, eval_batches)
+            history.append(record)
+            if log:
+                log(record)
+    return history
+
+
+def save_model(model, path):
+    """Save the settings and the learned numbers in one file."""
+    torch.save({"config": asdict(model.config), "state": model.state_dict()}, path)
+
+
+def load_model(path):
+    """Load a model saved with save_model, ready for use (not for training)."""
+    checkpoint = torch.load(path, map_location="cpu")
+    model = GPT(GPTConfig(**checkpoint["config"]))
+    model.load_state_dict(checkpoint["state"])
+    model.eval()
+    return model
 
 
 # --- Milestone 5: Implement a text generation feature that creates new product descriptions from a prompt.
