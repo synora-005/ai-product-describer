@@ -4,10 +4,28 @@ They start skipped. Remove the `skip` line as you work on each milestone.
 """
 import pytest
 
+from app.core import load_corpus, corpus_stats
+
+
 # Milestone 1: Collect a small corpus of product descriptions for a specific category.
-@pytest.mark.skip(reason="remove this line when you start milestone 1")
-def test_milestone_1():
-    raise NotImplementedError("write the test for milestone 1")
+def test_milestone_1(tmp_path):
+    path = tmp_path / "products.txt"
+    path.write_text(
+        "Top in soft  jersey with <b>short</b> sleeves.\n"  # messy spacing and HTML
+        "\n"                                                 # empty line
+        "Top in soft jersey with short sleeves.\n"           # same as the first once cleaned
+        "Tiny\n"                                             # too short
+        "Fitted top with a V-neck.\n",
+        encoding="utf-8",
+    )
+    descriptions = load_corpus(str(path), min_chars=10)
+    assert descriptions == [
+        "Top in soft jersey with short sleeves.",
+        "Fitted top with a V-neck.",
+    ]
+
+    stats = corpus_stats(["a b c", "d e"])
+    assert stats == {"count": 2, "characters": 8, "avg_words": 2.5}
 
 
 # Milestone 2: Implement the byte-pair tokenizer and generate embeddings for product text.
@@ -38,4 +56,3 @@ def test_milestone_5():
 @pytest.mark.skip(reason="remove this line when you start milestone 6")
 def test_milestone_6():
     raise NotImplementedError("write the test for milestone 6")
-
