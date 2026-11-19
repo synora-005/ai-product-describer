@@ -5,7 +5,15 @@ They start skipped. Remove the `skip` line as you work on each milestone.
 import pytest
 import torch
 
-from app.core import BPETokenizer, Embeddings, corpus_stats, encode_corpus, load_corpus
+from app.core import (
+    BPETokenizer,
+    CausalSelfAttention,
+    Embeddings,
+    TransformerBlock,
+    corpus_stats,
+    encode_corpus,
+    load_corpus,
+)
 
 
 # Milestone 1: Collect a small corpus of product descriptions for a specific category.
@@ -66,9 +74,41 @@ def test_milestone_2_embeddings():
 
 
 # Milestone 3: Build the causal self-attention mechanism and assemble the transformer block.
-@pytest.mark.skip(reason="remove this line when you start milestone 3")
 def test_milestone_3():
-    raise NotImplementedError("write the test for milestone 3")
+    torch.manual_seed(0)
+    attention = CausalSelfAttention(n_embd=16, n_head=4, block_size=8)
+    x = torch.randn(2, 8, 16)
+    assert attention(x).shape == (2, 8, 16)
+
+    # causal: changing the last three tokens must not change the outputs for the first five
+    changed = x.clone()
+    changed[:, 5:, :] = torch.randn(2, 3, 16)
+    before, after = attention(x), attention(changed)
+    assert torch.allclose(before[:, :5], after[:, :5], atol=1e-6)
+    assert not torch.allclose(before[:, 5:], after[:, 5:])
+
+    # the number of heads has to divide the embedding size
+    with pytest.raises(ValueError):
+        CausalSelfAttention(n_embd=16, n_head=3, block_size=8)
+
+    # a sequence longer than block_size is refused
+    with pytest.raises(ValueError):
+        attention(torch.randn(1, 9, 16))
+
+
+def test_milestone_3_block():
+    torch.manual_seed(0)
+    block = TransformerBlock(n_embd=16, n_head=4, block_size=8)
+    x = torch.randn(2, 8, 16)
+    out = block(x)
+    assert out.shape == (2, 8, 16)
+
+    # the block is causal too: the first 5 outputs do not depend on later tokens
+    assert torch.allclose(block(x[:, :5]), out[:, :5], atol=1e-5)
+
+    # training can reach every part of the block
+    out.sum().backward()
+    assert all(p.grad is not None for p in block.parameters())
 
 
 # Milestone 4: Train the GPT model using the collected product descriptions.

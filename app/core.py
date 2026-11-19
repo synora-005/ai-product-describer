@@ -1,11 +1,13 @@
 """Your code. One stub per milestone; build them in order and keep each one small."""
 
 import json
+import math
 import re
 from collections import Counter
 
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 
 # --- Milestone 1: Collect a small corpus of product descriptions for a specific category.
@@ -179,8 +181,78 @@ class Embeddings(nn.Module):
 
 # --- Milestone 3: Build the causal self-attention mechanism and assemble the transformer block.
 # Hint: Construct the causal self-attention layer and combine it with feed-forward networks within a transformer block.
-def milestone_3():  # TODO(milestone 3)
-    raise NotImplementedError("TODO(milestone 3)")
+class CausalSelfAttention(nn.Module):
+    """Several attention heads in parallel. Each token can only look at itself and earlier tokens.
+
+    Input and output both have shape (batch, length, n_embd).
+    """
+
+    def __init__(self, n_embd, n_head, block_size, dropout=0.0):
+        super().__init__()
+        if n_embd % n_head != 0:
+            raise ValueError(f"n_embd ({n_embd}) must be divisible by n_head ({n_head})")
+        self.n_head = n_head
+        self.block_size = block_size
+        self.qkv = nn.Linear(n_embd, 3 * n_embd)   # makes queries, keys and values in one go
+        self.proj = nn.Linear(n_embd, n_embd)      # mixes the heads back together
+        self.attn_dropout = nn.Dropout(dropout)
+        self.resid_dropout = nn.Dropout(dropout)
+        # lower-triangular matrix of ones: row t may look at columns 0..t only
+        mask = torch.tril(torch.ones(block_size, block_size))
+        self.register_buffer("mask", mask.view(1, 1, block_size, block_size))
+
+    def forward(self, x):
+        batch, length, channels = x.shape
+        if length > self.block_size:
+            raise ValueError(f"sequence length {length} is longer than block_size {self.block_size}")
+        head_size = channels // self.n_head
+
+        q, k, v = self.qkv(x).split(channels, dim=2)
+        # (batch, length, channels) -> (batch, heads, length, head_size)
+        q = q.view(batch, length, self.n_head, head_size).transpose(1, 2)
+        k = k.view(batch, length, self.n_head, head_size).transpose(1, 2)
+        v = v.view(batch, length, self.n_head, head_size).transpose(1, 2)
+
+        scores = (q @ k.transpose(-2, -1)) / math.sqrt(head_size)         # (batch, heads, length, length)
+        scores = scores.masked_fill(self.mask[:, :, :length, :length] == 0, float("-inf"))
+        weights = F.softmax(scores, dim=-1)                               # each row adds up to 1
+        weights = self.attn_dropout(weights)
+
+        out = weights @ v                                                 # (batch, heads, length, head_size)
+        out = out.transpose(1, 2).contiguous().view(batch, length, channels)
+        return self.resid_dropout(self.proj(out))
+
+
+class FeedForward(nn.Module):
+    """A small two-layer network applied to every position separately."""
+
+    def __init__(self, n_embd, dropout=0.0):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(n_embd, 4 * n_embd),
+            nn.GELU(),
+            nn.Linear(4 * n_embd, n_embd),
+            nn.Dropout(dropout),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+
+class TransformerBlock(nn.Module):
+    """Attention, then feed-forward, each with LayerNorm in front and a residual (x + ...) around it."""
+
+    def __init__(self, n_embd, n_head, block_size, dropout=0.0):
+        super().__init__()
+        self.ln1 = nn.LayerNorm(n_embd)
+        self.attn = CausalSelfAttention(n_embd, n_head, block_size, dropout)
+        self.ln2 = nn.LayerNorm(n_embd)
+        self.ffn = FeedForward(n_embd, dropout)
+
+    def forward(self, x):
+        x = x + self.attn(self.ln1(x))
+        x = x + self.ffn(self.ln2(x))
+        return x
 
 
 # --- Milestone 4: Train the GPT model using the collected product descriptions.
