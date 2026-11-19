@@ -1,21 +1,11 @@
-import torch
+from app.core import BPETokenizer, generate_description, load_model
 
-from app.core import BPETokenizer, Embeddings, TransformerBlock, encode_corpus, load_corpus
+tokenizer = BPETokenizer.load("data/tokenizer.json")
+model = load_model("data/model.pt")
 
-descriptions = load_corpus("data/products.txt")
-tokenizer = BPETokenizer.load("data/tokenizer.json")   # saved in milestone 2
-all_ids = encode_corpus(descriptions, tokenizer)
-
-torch.manual_seed(0)
-embeddings = Embeddings(tokenizer.vocab_size, block_size=64, n_embd=32)
-block = TransformerBlock(n_embd=32, n_head=4, block_size=64)
-
-x = torch.tensor(all_ids[:64]).unsqueeze(0)
-h = embeddings(x)
-out = block(h)
-print("in:", tuple(h.shape), "out:", tuple(out.shape))
-print("block parameters:", sum(p.numel() for p in block.parameters()))
-
-# causal check: the first 10 outputs must not depend on the tokens after them
-out_short = block(h[:, :10])
-print("causal check:", torch.allclose(out[:, :10], out_short, atol=1e-5))
+for prompt in ["", "Oversized cotton t-shirt", "Fitted top in", "V-neck"]:
+    print(f"\nPrompt: {prompt!r}")
+    print("  greedy :", generate_description(model, tokenizer, prompt, temperature=0))
+    for temperature in (0.5, 0.8, 1.2):
+        text = generate_description(model, tokenizer, prompt, temperature=temperature, seed=1)
+        print(f"  T={temperature}:", text)

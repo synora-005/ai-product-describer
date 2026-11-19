@@ -17,6 +17,8 @@ from app.core import (
     corpus_stats,
     encode_corpus,
     estimate_loss,
+    generate,
+    generate_description,
     get_batch,
     load_corpus,
     load_model,
@@ -174,9 +176,54 @@ def test_milestone_4_save_and_load(tmp_path):
 
 
 # Milestone 5: Implement a text generation feature that creates new product descriptions from a prompt.
-@pytest.mark.skip(reason="remove this line when you start milestone 5")
 def test_milestone_5():
-    raise NotImplementedError("write the test for milestone 5")
+    torch.manual_seed(0)
+    model = GPT(small_config(vocab_size=50))
+    prompt = [1, 2, 3]
+
+    # greedy (temperature 0) always gives the same answer, and respects the length limit
+    greedy = generate(model, prompt, max_new_tokens=12, temperature=0, top_k=None)
+    assert greedy == generate(model, prompt, max_new_tokens=12, temperature=0, top_k=None)
+    assert len(greedy) == 12
+
+    # top_k=1 leaves only the best token, so it matches greedy
+    assert generate(model, prompt, max_new_tokens=12, temperature=1.0, top_k=1) == greedy
+
+    # the same seed repeats the same text; different seeds give different text
+    first = generate(model, prompt, max_new_tokens=20, temperature=1.0, top_k=None, seed=1)
+    assert first == generate(model, prompt, max_new_tokens=20, temperature=1.0, top_k=None, seed=1)
+    assert first != generate(model, prompt, max_new_tokens=20, temperature=1.0, top_k=None, seed=2)
+
+    # bad settings are refused
+    with pytest.raises(ValueError):
+        generate(model, prompt, temperature=-1)
+    with pytest.raises(ValueError):
+        generate(model, prompt, top_k=0)
+
+
+def test_milestone_5_stops_at_end_token():
+    torch.manual_seed(0)
+    # the pattern 0 1 2 <end> repeated, where the end token is ID 4
+    data = torch.tensor([0, 1, 2, 4] * 60)
+    model = GPT(small_config(vocab_size=5))
+    train(model, data, block_size=8, steps=300, batch_size=8, lr=1e-2)
+
+    # after "0" comes 1, then 2, then the end token, so generation stops with [1, 2]
+    assert generate(model, [4, 0], max_new_tokens=10, temperature=0, top_k=None, eot_id=4) == [1, 2]
+
+    # without an end token to stop at, it keeps going until the limit
+    assert generate(model, [4, 0], max_new_tokens=5, temperature=0, top_k=None) == [1, 2, 4, 0, 1]
+
+
+def test_milestone_5_description():
+    torch.manual_seed(0)
+    tokenizer = BPETokenizer.train(["the cat sat on the mat"], vocab_size=257 + 5)
+    model = GPT(small_config(vocab_size=tokenizer.vocab_size))
+
+    text = generate_description(model, tokenizer, "the cat", max_new_tokens=10, seed=0)
+    assert isinstance(text, str)
+    assert text.startswith("the cat")
+    assert text == generate_description(model, tokenizer, "the cat", max_new_tokens=10, seed=0)
 
 
 # Milestone 6: Develop a CLI for users to input product details and receive generated descriptions.

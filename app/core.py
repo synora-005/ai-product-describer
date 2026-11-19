@@ -376,8 +376,60 @@ def load_model(path):
 
 # --- Milestone 5: Implement a text generation feature that creates new product descriptions from a prompt.
 # Hint: Develop a sampling strategy (e.g., greedy or top-k) to generate new tokens iteratively.
-def milestone_5():  # TODO(milestone 5)
-    raise NotImplementedError("TODO(milestone 5)")
+def generate(model, prompt_ids, max_new_tokens=60, temperature=0.8, top_k=40, eot_id=None, seed=None):
+    """Continue a list of token IDs, one token at a time. Returns only the new IDs.
+
+    temperature=0 always takes the highest-scoring token (greedy). Above 0, a token is drawn at
+    random: below 1 is more careful, above 1 is more adventurous. top_k keeps only the k
+    best-scoring tokens in the draw. Stops early if the model produces eot_id.
+    """
+    if temperature < 0:
+        raise ValueError("temperature cannot be negative")
+    if top_k is not None and top_k < 1:
+        raise ValueError("top_k must be at least 1 (or None)")
+
+    generator = torch.Generator().manual_seed(seed) if seed is not None else None
+    block_size = model.config.block_size
+    was_training = model.training
+    model.eval()
+
+    idx = torch.tensor([list(prompt_ids)], dtype=torch.long)
+    new_ids = []
+    with torch.no_grad():
+        for _ in range(max_new_tokens):
+            logits, _ = model(idx[:, -block_size:])      # the model can only see the last block_size tokens
+            logits = logits[:, -1, :]                    # scores for the token that comes next
+
+            if top_k is not None:
+                k = min(top_k, logits.size(-1))
+                cutoff = torch.topk(logits, k).values[:, -1, None]
+                logits = logits.masked_fill(logits < cutoff, float("-inf"))
+
+            if temperature == 0:
+                next_id = torch.argmax(logits, dim=-1, keepdim=True)
+            else:
+                probs = F.softmax(logits / temperature, dim=-1)
+                next_id = torch.multinomial(probs, 1, generator=generator)
+
+            token = next_id.item()
+            if eot_id is not None and token == eot_id:
+                break
+            new_ids.append(token)
+            idx = torch.cat([idx, next_id], dim=1)
+
+    model.train(was_training)
+    return new_ids
+
+
+def generate_description(model, tokenizer, prompt="", max_new_tokens=60, temperature=0.8,
+                         top_k=40, seed=None):
+    """Write a product description that starts with the prompt (which can be empty)."""
+    prompt = prompt.strip()
+    # in the training data every description came right after the end token, so start with it
+    prompt_ids = [tokenizer.eot_id] + tokenizer.encode(prompt)
+    new_ids = generate(model, prompt_ids, max_new_tokens=max_new_tokens, temperature=temperature,
+                       top_k=top_k, eot_id=tokenizer.eot_id, seed=seed)
+    return prompt + tokenizer.decode(new_ids)
 
 
 # --- Milestone 6: Develop a CLI for users to input product details and receive generated descriptions.
