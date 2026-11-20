@@ -1,6 +1,7 @@
 # AI Product Describer
 
-PASTE THE BADGE LINE FROM THE ASKTHILI SHIP TAB HERE (replace this whole line)
+
+[![Built with askThili](https://msrit.ask.thili.ai/api/v1/public/projects/ndwvqx2mxn/badge.svg)](https://msrit.ask.thili.ai/b/ndwvqx2mxn)
 
 A command-line tool that writes product descriptions. It is a small GPT (the same kind of model as ChatGPT, at a tiny scale) written from scratch in PyTorch and trained on T-shirt descriptions. You give it a few product details, and it continues them into a full description.
 
